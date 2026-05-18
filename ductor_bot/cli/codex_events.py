@@ -247,12 +247,16 @@ def _parse_tool_item(item: dict[str, Any], item_type: str, event_type: str) -> l
 
 
 class CodexThinkingFilter:
-    """Suppress intermediate agent text that precedes tool calls.
+    """Separate progress text from final answer text.
 
-    Buffers ``AssistantTextDelta`` events.  When a ``ToolUseEvent`` arrives the
-    buffered text is discarded (it was the model "thinking aloud" before a tool
-    call).  When any other non-thinking event arrives the buffer is flushed
-    first so final response text is preserved.
+    Codex emits user-facing progress updates and final answers through the same
+    ``agent_message`` item type.  Buffer assistant text until we know what
+    follows it:
+
+    - text followed by a tool call is progress/reasoning, so emit it as
+      ``ThinkingEvent`` and keep it out of the accumulated final answer;
+    - text followed by any non-tool boundary, or by stream end, is final answer
+      text and is flushed unchanged.
     """
 
     def __init__(self) -> None:
@@ -265,8 +269,9 @@ class CodexThinkingFilter:
             return []
 
         if isinstance(event, ToolUseEvent):
-            self._buffered.clear()
-            return [event]
+            result = self._drain_as_thinking()
+            result.append(event)
+            return result
 
         if isinstance(event, ThinkingEvent):
             return [event]
@@ -279,5 +284,15 @@ class CodexThinkingFilter:
     def flush(self) -> list[StreamEvent]:
         """Flush remaining buffered events (call at stream end)."""
         events = list(self._buffered)
+        self._buffered.clear()
+        return events
+
+    def _drain_as_thinking(self) -> list[StreamEvent]:
+        """Flush buffered assistant text as reasoning/progress events."""
+        events: list[StreamEvent] = [
+            ThinkingEvent(type="assistant", text=event.text)
+            for event in self._buffered
+            if isinstance(event, AssistantTextDelta) and event.text
+        ]
         self._buffered.clear()
         return events

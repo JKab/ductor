@@ -176,6 +176,17 @@ class EditStreamEditor:
         await self._do_edit()
         await self._attach_buttons(full_text)
 
+    async def finalize_progress(self, final_status: str | None = "DONE") -> None:
+        """Force a final progress edit while preserving indicators."""
+        self._cancel_timer()
+        if self._s.fallen_back:
+            return
+        self._flush_text_segment()
+        if final_status:
+            self._s.tool_tracker.add(final_status, style="system")
+        self._flush_tool_segment()
+        await self._do_edit()
+
     # ------------------------------------------------------------------
     # Internal: segment management
     # ------------------------------------------------------------------

@@ -55,6 +55,7 @@ class StreamingConfig(BaseModel):
     edit_interval_seconds: float = 2.0
     max_edit_failures: int = 3
     append_mode: bool = False
+    progress_message_mode: bool = False
     sentence_break: bool = True
     show_reasoning_stream: bool = False
     show_tool_progress: bool = True

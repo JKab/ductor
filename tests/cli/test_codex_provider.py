@@ -761,6 +761,50 @@ class TestSendStreaming:
         assert tool_events[0].tool_name == "Bash"
         assert tool_events[1].tool_name == "Edit"
 
+    async def test_pre_tool_agent_text_becomes_reasoning_not_final(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        cli = _make_cli(monkeypatch)
+        lines = [
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "I will inspect the config."},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.started",
+                    "item": {"type": "command_execution"},
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "item.completed",
+                    "item": {"type": "agent_message", "text": "Final answer only."},
+                }
+            ),
+        ]
+        proc = _make_streaming_process(lines, returncode=0)
+
+        with patch("ductor_bot.cli.executor.asyncio") as mock_asyncio:
+            mock_asyncio.timeout = asyncio.timeout
+            mock_asyncio.subprocess = asyncio.subprocess
+            mock_asyncio.create_subprocess_exec = AsyncMock(return_value=proc)
+            mock_asyncio.create_task = asyncio.ensure_future
+
+            events = await _collect_events(cli.send_streaming("hello"))
+
+        thinking_events = [e for e in events if isinstance(e, ThinkingEvent)]
+        text_events = [e for e in events if isinstance(e, AssistantTextDelta)]
+        result_events = [e for e in events if isinstance(e, ResultEvent)]
+
+        assert [e.text for e in thinking_events] == ["I will inspect the config."]
+        assert [e.text for e in text_events] == ["Final answer only."]
+        assert len(result_events) == 1
+        assert result_events[0].result == "Final answer only."
+        assert "inspect the config" not in result_events[0].result
+
     async def test_streaming_with_thinking_events(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cli = _make_cli(monkeypatch)
         lines = [

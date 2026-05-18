@@ -49,6 +49,7 @@ def test_agent_config_streaming_defaults() -> None:
     assert cfg.streaming.enabled is True
     assert cfg.streaming.min_chars == 200
     assert cfg.streaming.max_chars == 4000
+    assert cfg.streaming.progress_message_mode is False
 
 
 def test_agent_config_docker_defaults() -> None:
@@ -128,6 +129,7 @@ def test_streaming_config_fields() -> None:
     s = StreamingConfig(enabled=False, min_chars=100)
     assert s.enabled is False
     assert s.min_chars == 100
+    assert s.progress_message_mode is False
 
 
 def test_docker_config_fields() -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ductor_bot.cli.coalescer import CoalesceConfig, StreamCoalescer
+from ductor_bot.messenger.telegram.edit_streaming import EditStreamEditor
 from ductor_bot.messenger.telegram.sender import (
     SendRichOpts,
     send_files_from_text,
@@ -240,6 +241,9 @@ async def run_streaming_message(  # noqa: C901, PLR0915
         enabled=_status_reaction_enabled(dispatch.scene_config),
     )
 
+    if dispatch.streaming_cfg.progress_message_mode:
+        return await _run_progress_final_streaming_message(dispatch, tracker)
+
     editor = create_stream_editor(
         dispatch.bot,
         dispatch.key.chat_id,
@@ -388,4 +392,133 @@ async def run_streaming_message(  # noqa: C901, PLR0915
 
         return result.text
     finally:
+        await tracker.clear()
+
+
+async def _run_progress_final_streaming_message(  # noqa: C901, PLR0915
+    dispatch: StreamingDispatch,
+    tracker: ReactionTracker,
+) -> str:
+    """Stream progress into one edited message, then send the final answer once."""
+    progress_editor = EditStreamEditor(
+        dispatch.bot,
+        dispatch.key.chat_id,
+        reply_to=dispatch.message,
+        cfg=dispatch.streaming_cfg,
+        thread_id=dispatch.thread_id,
+    )
+    thinking_indicator_sent = False
+
+    if dispatch.streaming_cfg.show_thinking_indicator:
+        thinking_indicator_sent = True
+        await progress_editor.append_system("THINKING")
+
+    reasoning_coalescer: StreamCoalescer | None = None
+    if dispatch.streaming_cfg.show_reasoning_stream:
+
+        async def _flush_reasoning_chunk(chunk: str) -> None:
+            formatted = _format_reasoning_chunk(chunk)
+            if formatted:
+                await progress_editor.append_text(formatted)
+
+        reasoning_coalescer = StreamCoalescer(
+            config=CoalesceConfig(
+                min_chars=dispatch.streaming_cfg.min_chars,
+                max_chars=dispatch.streaming_cfg.max_chars,
+                idle_ms=dispatch.streaming_cfg.idle_ms,
+                sentence_break=dispatch.streaming_cfg.sentence_break,
+            ),
+            on_flush=_flush_reasoning_chunk,
+        )
+
+    async def _flush_reasoning() -> None:
+        if reasoning_coalescer is not None:
+            await reasoning_coalescer.flush(force=True)
+
+    async def on_text(_delta: str) -> None:
+        return
+
+    async def on_tool(tool_name: str) -> None:
+        await tracker.set_tool(tool_name)
+        await _flush_reasoning()
+        if dispatch.streaming_cfg.show_tool_progress:
+            await progress_editor.append_tool(tool_name)
+
+    async def on_system(status: str | None) -> None:
+        nonlocal thinking_indicator_sent
+        system_map: dict[str, str] = {
+            "thinking": "THINKING",
+            "compacting": "COMPACTING",
+            "recovering": "Please wait, recovering...",
+            "timeout_warning": "TIMEOUT APPROACHING",
+            "timeout_extended": "TIMEOUT EXTENDED",
+        }
+        label = system_map.get(status or "")
+        if label is None:
+            return
+        if status == "thinking":
+            if not dispatch.streaming_cfg.show_thinking_indicator:
+                return
+            if thinking_indicator_sent:
+                return
+            thinking_indicator_sent = True
+        await tracker.set_system()
+        await _flush_reasoning()
+        await progress_editor.append_system(label)
+
+    async def on_reasoning(delta: str) -> None:
+        nonlocal thinking_indicator_sent
+        if not delta.strip():
+            return
+        await tracker.set_thinking()
+        if reasoning_coalescer is not None:
+            await reasoning_coalescer.feed(delta)
+            return
+        if dispatch.streaming_cfg.show_thinking_indicator and not thinking_indicator_sent:
+            thinking_indicator_sent = True
+            await on_system("thinking")
+
+    try:
+        await tracker.set_thinking()
+        async with TypingContext(dispatch.bot, dispatch.key.chat_id, thread_id=dispatch.thread_id):
+            result = await dispatch.orchestrator.handle_message_streaming(
+                dispatch.key,
+                dispatch.text,
+                on_text_delta=on_text,
+                on_tool_activity=on_tool,
+                on_system_status=on_system,
+                on_reasoning_delta=on_reasoning,
+            )
+
+        await _flush_reasoning()
+        if reasoning_coalescer is not None:
+            reasoning_coalescer.stop()
+
+        footer = _build_footer(result, dispatch.scene_config)
+        if footer:
+            result.text += footer
+
+        if progress_editor.has_content:
+            await progress_editor.finalize_progress()
+
+        await send_rich(
+            dispatch.bot,
+            dispatch.key.chat_id,
+            result.text,
+            SendRichOpts(
+                reply_to_message_id=dispatch.message.message_id,
+                allowed_roots=dispatch.allowed_roots,
+                thread_id=dispatch.thread_id,
+            ),
+        )
+
+        logger.info(
+            "Progress-final streaming flow completed fallback=%s progress=%s",
+            result.stream_fallback,
+            progress_editor.has_content,
+        )
+        return result.text
+    finally:
+        if reasoning_coalescer is not None:
+            reasoning_coalescer.stop()
         await tracker.clear()

@@ -181,6 +181,17 @@ class TestEditStreamEditor:
         await editor.finalize("")
         assert editor.has_content is True
 
+    async def test_finalize_progress_preserves_indicators(self) -> None:
+        bot, editor = _make_editor()
+        await editor.append_text("Looking at the code")
+        await editor.append_tool("Bash")
+        await editor.finalize_progress()
+
+        last_text = self._get_last_message_text(bot)
+        assert "Looking at the code" in last_text
+        assert "[TOOL: Shell]" in last_text
+        assert "[DONE]" in last_text
+
     async def test_single_tool_no_count_suffix(self) -> None:
         bot, editor = _make_editor()
         await editor.append_tool("Read")

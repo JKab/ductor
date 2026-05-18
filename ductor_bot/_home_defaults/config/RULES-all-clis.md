@@ -57,7 +57,7 @@ For user-facing schedules, set `user_timezone` explicitly.
 - `streaming.enabled`
 - `streaming.min_chars`, `streaming.max_chars`
 - `streaming.idle_ms`, `streaming.edit_interval_seconds`
-- `streaming.append_mode`, `streaming.sentence_break`
+- `streaming.append_mode`, `streaming.progress_message_mode`, `streaming.sentence_break`
 
 ### Webhooks
 
